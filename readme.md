@@ -129,3 +129,46 @@ Certains paramètres peuvent être ajustés directement dans le code du serveur 
 
 *   **Paramètres de lissage** (dans le listener de `smoothing-slider`) : Les formules qui mappent la valeur du curseur de lissage (0-100) aux paramètres `minCutoff` et `beta` du filtre peuvent être modifiées pour changer la "sensation" du lissage.
 *   `calibTrackerId` (dans le listener de `record-point-btn`): L'ID du tracker à utiliser pour la calibration (par défaut "T0").
+
+## Fonctionnement de l'Application
+
+### Vue d'ensemble
+
+L'application UWB Tracking permet de visualiser en temps réel la position de balises UWB (tags) dans l'espace, projetées sur un écran 2D correspondant à une surface physique (ex : mur, tableau, écran de projection). Elle est conçue pour être simple à utiliser, robuste, et adaptée à des installations réelles.
+
+### 1. Réception et Traitement des Données
+- Les balises (tags) UWB envoient leurs distances mesurées par rapport à chaque ancre via UDP au serveur Python.
+- Le backend (`app.py`) reçoit ces données, effectue une multilatération pour calculer la position 3D de chaque tag, puis projette cette position sur le plan de l'écran calibré.
+- Les positions sont transmises en temps réel à l'interface web via WebSocket (Flask-SocketIO).
+
+### 2. Interface Utilisateur
+- L'interface web affiche :
+  - Une carte 2D de l'écran calibré avec les positions des tags en temps réel.
+  - Un panneau latéral listant chaque tag, ses distances aux ancres, sa position 3D, et la fréquence de mise à jour.
+  - Un système de traînée (motion trail) pour visualiser le mouvement des tags.
+  - Un panneau de réglages pour configurer les ancres et l'écran.
+- L'interface est responsive, moderne, et utilise Tailwind CSS pour un rendu professionnel.
+
+### 3. Calibration de l'Écran
+- **Calibration assistée (recommandée) :**
+  - Accessible via le bouton « Calibrer l'Écran » dans les réglages.
+  - Un assistant guide l'utilisateur à placer le tag de référence (T0) sur 10 points précis de l'écran.
+  - À chaque étape, la position 3D du tag est mesurée et associée à une coordonnée 2D de l'écran.
+  - À la fin, l'application calcule automatiquement la géométrie exacte de l'écran (origine, vecteurs de base, dimensions).
+- **Configuration manuelle :**
+  - Si vous connaissez précisément la largeur, la hauteur et la position du coin bas-gauche de l'écran, vous pouvez les saisir directement dans le panneau de réglages.
+
+### 4. Réglages et Configuration
+- **Ancres :**
+  - Les coordonnées X, Y, Z de chaque ancre (en cm) sont configurables via l'interface web.
+  - Toute modification nécessite de sauvegarder puis de relancer la calibration de l'écran.
+- **Paramètres de lissage :**
+  - Un curseur permet d'ajuster le niveau de lissage du mouvement des tags (filtre One-Euro).
+  - Un bouton permet d'activer/désactiver le lissage.
+- **Plein écran :**
+  - Un bouton permet de passer l'interface en mode plein écran pour une visualisation optimale.
+
+### 5. Robustesse et Sécurité
+- Les trackers inactifs sont automatiquement retirés de l'interface après un délai configurable.
+- Les fichiers sensibles (`config.json`, `app.log`, etc.) sont exclus du dépôt public grâce au `.gitignore`.
+- Le projet est publié sous licence MIT, sans aucune information personnelle.
