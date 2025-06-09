@@ -268,14 +268,15 @@
         document.addEventListener('DOMContentLoaded', function () {
             const socket = io();
 
-        // --- Config ---
-        let anchorPositions = {}; // Will be loaded from server
-        let calibratedScreenDims = { width: null, height: null }; // To store screen dimensions in cm
-        let screenGeometry = { origin: null, vec_x: null, vec_y: null }; // Will store full geometry in cm
-        let yCorrectionFactor = 1.0; // To fix aspect ratio distortion on dots/text
-        let isCalibrating = false;
-        let currentCalibStep = 0;
-        const totalCalibSteps = 10;
+        // --- Configuration ---
+        let anchorPositions = {}; // Sera chargé depuis le serveur
+        let calibratedScreenDims = { width: null, height: null }; // Pour stocker les dimensions de l'écran en cm
+        let screenGeometry = { origin: null, vec_x: null, vec_y: null }; // Stockera la géométrie complète en cm
+        let yCorrectionFactor = 1.0; // Pour corriger la distorsion d'aspect sur les points/texte
+        let isCalibrating = false; // Indicateur de l'état de calibration
+        let currentCalibStep = 0; // Étape actuelle de la calibration
+        const totalCalibSteps = 10; // Nombre total de points pour la calibration
+        // Coordonnées des cibles de calibration sur l'écran (en % pour le positionnement CSS et en UV normalisé pour le calcul)
         const calibTargetPoints = [
             { name: 'Haut-Gauche',   uv: [0.05, 0.95], pos: { top: '5%',  left: '5%' } },
             { name: 'Gauche-Milieu', uv: [0.05, 0.5],  pos: { top: '50%', left: '5%' } },
@@ -289,13 +290,13 @@
             { name: 'Bas-Droit',     uv: [0.95, 0.05], pos: { top: '95%', left: '95%' } }
         ];
         
-        // Initial fetch of anchor positions
+        // Récupération initiale de la configuration des ancres depuis le serveur.
         function fetchAnchorConfig() {
             return fetch('/api/anchors')
                 .then(res => res.json())
                 .then(data => {
                     console.log("Configuration des ancres chargée:", data.anchors);
-                    // Convert cm to meters for calculations
+                    // Conversion des coordonnées des ancres de cm en mètres pour les calculs internes.
                     for (const key in data.anchors) {
                         anchorPositions[key] = {
                             x: data.anchors[key].x / 100.0,
@@ -307,18 +308,18 @@
                 .catch(error => console.error('Erreur de chargement de la configuration des ancres:', error));
         }
         
-        const TRAIL_LENGTH = 20; // Number of points in the trail
-        const TAG_STALE_MS = 10000; // Time before a tag is considered stale and removed
+        const TRAIL_LENGTH = 20; // Nombre de points dans la traînée de mouvement.
+        const TAG_STALE_MS = 10000; // Délai en ms avant qu'un tracker soit considéré comme inactif et retiré.
 
-        // --- DOM Elements ---
+        // --- Éléments du DOM ---
         const connectionStatusElement = document.getElementById('connectionStatus');
         const trackerDotsGroup = document.getElementById('tracker-dots-group');
         const trackerTrailsGroup = document.getElementById('tracker-trails-group');
         const trackersSidebar = document.getElementById('trackers-sidebar');
 
-        // --- State ---
-        let tagStates = {};
-        const tagColors = ['#22C55E', '#3B82F6', '#EF4444', '#EAB308', '#EC4899'];
+        // --- État de l'application ---
+        let tagStates = {}; // Stocke l'état de chaque tracker (éléments DOM, filtres, historique, etc.)
+        const tagColors = ['#22C55E', '#3B82F6', '#EF4444', '#EAB308', '#EC4899']; // Palette de couleurs pour les trackers.
 
         const getTagColor = (index) => tagColors[index % tagColors.length];
 
@@ -346,25 +347,25 @@
             }
         });
 
-        // --- Socket.IO Handler ---
+        // --- Gestionnaire de messages Socket.IO ---
         socket.on('uwb_update', function(data) {
             const receivedTags = data.tags ? Object.keys(data.tags) : [];
 
-            // Mark all current tags as not updated
+            // Marque tous les tags actuels comme non mis à jour.
             Object.values(tagStates).forEach(s => s.updated = false);
 
             receivedTags.forEach(tagId => {
                 if (!tagStates[tagId]) {
-                    // Pass the initial data packet to the creation function
+                    // Si c'est un nouveau tag, on passe le paquet de données initial à la fonction de création.
                     createTagUI(tagId, data.tags[tagId]);
                 }
                 updateTagState(tagId, data.tags[tagId]);
                 tagStates[tagId].updated = true;
             });
-             // Mark non-updated tags to be checked for staleness
+             // Marque les tags non mis à jour pour vérifier s'ils sont obsolètes.
             Object.values(tagStates).forEach(state => {
                 if (!state.updated) {
-                    state.staleCheck = true; // Mark for potential removal
+                    state.staleCheck = true;
                 }
             });
         });
@@ -373,11 +374,11 @@
             const color = getTagColor(Object.keys(tagStates).length);
             const svgNS = "http://www.w3.org/2000/svg";
             
-            // Create SVG elements
+            // Création des éléments SVG pour le point et la traînée
             const trail = document.createElementNS(svgNS, 'g');
             trail.setAttribute('id', `trail-${tagId}`);
             
-            const dot = document.createElementNS(svgNS, 'ellipse'); // Use ellipse to allow aspect ratio correction
+            const dot = document.createElementNS(svgNS, 'ellipse'); // Utilisation d'une ellipse pour corriger le ratio d'aspect.
             dot.setAttribute('id', `dot-${tagId}`);
             dot.setAttribute('rx', 8);
             dot.setAttribute('ry', 8);
@@ -413,7 +414,7 @@
                     </div>
                 </div>
                 <div class="grid grid-cols-2 gap-x-4 text-sm font-mono border-t border-slate-800 pt-3">
-                    <!-- Distances 2x2 Grid -->
+                    <!-- Grille des distances 2x2 -->
                     <div id="dist-grid-${tagId}" class="grid grid-cols-2 gap-x-4 gap-y-1">
                         ${Object.keys(anchorPositions).sort().map(anchorId => `
                             <div class="flex justify-between items-baseline">
@@ -422,7 +423,7 @@
                             </div>
                         `).join('')}
                     </div>
-                    <!-- 3D Coords -->
+                    <!-- Coordonnées 3D -->
                     <div id="pos-grid-${tagId}" class="flex flex-col items-center justify-center gap-y-2 border-l border-slate-800 pl-4 text-center">
                         <span class="text-xs text-slate-400 -mb-1">Position 3D (m)</span>
                         <div class="flex gap-x-3">
@@ -442,15 +443,15 @@
                     </div>
                 </div>
                 <div id="status-msg-${tagId}" class="text-center text-amber-400 text-sm py-2 border-t border-slate-800/50 mt-2 hidden">
-                    <!-- Status messages will be injected here -->
+                    <!-- Les messages de statut seront injectés ici -->
                 </div>
             `;
             trackersSidebar.appendChild(card);
             
-            // --- OneEuroFilter Setup ---
-            // These parameters were tuned for the old coordinate system. They will feel
-            // different now that the coordinate system is in cm, but should still provide
-            // a good base for smoothing. The user can adjust the slider.
+            // --- Initialisation du filtre "One-Euro" ---
+            // Ces paramètres ont été ajustés pour l'ancien système de coordonnées.
+            // Ils seront différents maintenant que les coordonnées sont en cm, mais devraient
+            // fournir une bonne base pour le lissage. L'utilisateur peut ajuster le curseur.
             const initialFreq = 30.0; 
             const defaultMinCutoff = 0.0238;
             const defaultBeta = 0.00152;
@@ -460,7 +461,7 @@
                 filterX: new OneEuroFilter(initialFreq, defaultMinCutoff, defaultBeta),
                 filterY: new OneEuroFilter(initialFreq, defaultMinCutoff, defaultBeta),
                 positionHistory: [],
-                updateTimestamps: [], // For frequency calculation
+                updateTimestamps: [], // Pour le calcul de la fréquence
                 lastSeen: Date.now(),
                 updated: true
             };
@@ -472,69 +473,69 @@
             state.lastSeen = now;
             state.updated = true;
 
-            // --- Frequency Calculation ---
+            // --- Calcul de la fréquence ---
             state.updateTimestamps.push(now);
-            // Keep only the last 10 timestamps
+            // On ne garde que les 10 derniers timestamps.
             if (state.updateTimestamps.length > 10) {
                 state.updateTimestamps.shift();
             }
             calculateAndDisplayFrequency(tagId);
             // -------------------------
 
-            // --- Update UI Text ---
+            // --- Mise à jour du texte dans la sidebar ---
             updateSidebarText(tagId, tagData);
             
-            // --- Position Update ---
+            // --- Mise à jour de la position ---
             if(tagData.position_2d && tagData.status === 'tracking' && !isCalibrating && calibratedScreenDims.width !== null) {
                 let [u, v] = tagData.position_2d;
                 let isOffScreen = (u < 0 || u > 1 || v < 0 || v > 1);
 
                 if(isOffScreen) {
-                    state.dot.setAttribute('fill', '#EF4444'); // Red color for off-screen
+                    state.dot.setAttribute('fill', '#EF4444'); // Couleur rouge si hors-champ
                 } else {
-                    state.dot.setAttribute('fill', state.color); // Restore original color
+                    state.dot.setAttribute('fill', state.color); // Rétablir la couleur originale
                 }
                 
-                // Clamp the coordinates to the edges for filtering, so the dot smoothly approaches the border
+                // On fixe les coordonnées aux bords pour le filtre, pour que le point s'approche doucement de la bordure.
                 const clampedU = Math.max(0, Math.min(1, u));
                 const clampedV = Math.max(0, Math.min(1, v));
 
                 const rawCmX = clampedU * calibratedScreenDims.width;
-                const rawCmY = (1 - clampedV) * calibratedScreenDims.height;
+                const rawCmY = (1 - clampedV) * calibratedScreenDims.height; // Inversion de l'axe Y pour le SVG
                 
                 let finalX = rawCmX;
                 let finalY = rawCmY;
 
                 if (isSmoothingEnabled) {
-                    // Apply One-Euro filter. It now filters cm values.
-                    const timestamp = now / 1000.0; // seconds
+                    // Application du filtre One-Euro. Il filtre maintenant les valeurs en cm.
+                    const timestamp = now / 1000.0; // secondes
                     finalX = state.filterX.filter(rawCmX, timestamp);
                     finalY = state.filterY.filter(rawCmY, timestamp);
                 }
                 
-                 // Make dot size and label offset relative to screen size, and correct for aspect ratio
+                 // La taille du point et le décalage du label sont relatifs à la taille de l'écran, et corrigés pour le ratio d'aspect.
                 const smallestDim = Math.min(calibratedScreenDims.width, calibratedScreenDims.height);
                 const baseRadius = smallestDim * 0.025;
                 state.dot.setAttribute('rx', baseRadius.toFixed(2));
                 state.dot.setAttribute('ry', (baseRadius * yCorrectionFactor).toFixed(2));
 
-                // Font size based on height, make it much smaller
+                // Taille de la police basée sur la hauteur, rendue plus petite.
                 const labelFontSize = calibratedScreenDims.height / 37.5;
                 state.label.setAttribute('font-size', labelFontSize.toFixed(2));
                 
-                // Update label text with coordinates
+                // Mise à jour du texte du label avec les coordonnées.
                 const x_meters = (finalX / 100).toFixed(2);
                 const y_meters = (finalY / 100).toFixed(2);
                 state.label.textContent = `${tagId} (${x_meters}, ${y_meters})`;
 
-                // Apply inverse transform to the text to un-stretch it
+                // Applique une transformation inverse au texte pour annuler l'étirement.
                 if (yCorrectionFactor !== 0) {
                      state.label.setAttribute('transform', `scale(1, ${1 / yCorrectionFactor})`);
                 }
 
-                // Adjust dy to place text above the ellipse
+                // Ajuste dy pour placer le texte au-dessus de l'ellipse.
                 const verticalRadius = parseFloat(state.dot.getAttribute('ry'));
-                // The dy offset also needs to be corrected for the text's own transform
+                // Le décalage dy doit aussi être corrigé par la propre transformation du texte.
                 const correctedDy = - (verticalRadius + labelFontSize * 0.5) * yCorrectionFactor;
                 state.label.setAttribute('dy', correctedDy.toFixed(2));
 
@@ -549,7 +550,7 @@
                 }
 
             } else {
-                // Hide dot if position is invalid or not tracking
+                // Cache le point si la position est invalide ou si le suivi n'est pas actif.
                 state.dot.setAttribute('cx', -100);
                 state.dot.setAttribute('cy', -100);
                 state.label.setAttribute('x', -100);
@@ -558,7 +559,7 @@
         }
         
         function updateSidebarText(tagId, tagData) {
-            // Update distances (backend sends them in meters)
+            // Mise à jour des distances (le backend les envoie en mètres).
             Object.keys(anchorPositions).forEach(anchorId => {
                 const el = document.getElementById(`dist-${tagId}-${anchorId}`);
                 if (el) {
@@ -567,16 +568,16 @@
                 }
             });
 
-            // Update 3D position (backend sends it in meters)
+            // Mise à jour de la position 3D (le backend l'envoie en mètres).
             const pos3d_m = tagData.position_3d;
             document.getElementById(`pos-${tagId}-x`).textContent = pos3d_m ? `${pos3d_m[0].toFixed(2)}` : '-.--';
             document.getElementById(`pos-${tagId}-y`).textContent = pos3d_m ? `${pos3d_m[1].toFixed(2)}` : '-.--';
             document.getElementById(`pos-${tagId}-z`).textContent = pos3d_m ? `${pos3d_m[2].toFixed(2)}` : '-.--';
 
-            // Update frequency
+            // Mise à jour de la fréquence.
             calculateAndDisplayFrequency(tagId);
 
-            // Update status message
+            // Mise à jour du message de statut.
             const distGrid = document.getElementById(`dist-grid-${tagId}`);
             const posGrid = document.getElementById(`pos-grid-${tagId}`);
             const statusMsg = document.getElementById(`status-msg-${tagId}`);
@@ -633,31 +634,31 @@
         }
         
         function updateTag2DPosition(tagId, distances) {
-            // This function is now OBSOLETE as position is calculated on the backend.
-            // All logic is now in updateTagState.
+            // Cette fonction est maintenant OBSOLÈTE car la position est calculée sur le backend.
+            // Toute la logique est maintenant dans updateTagState.
             return;
         }
         
         function animateTrails() {
             const svgNS = "http://www.w3.org/2000/svg";
             Object.values(tagStates).forEach(state => {
-                // Clear previous trail
+                // Efface la traînée précédente.
                 while (state.trail.firstChild) {
                     state.trail.removeChild(state.trail.firstChild);
                 }
-                 // Redraw trail
+                 // Redessine la traînée.
                 if (calibratedScreenDims.width !== null) {
                     const smallestDim = Math.min(calibratedScreenDims.width, calibratedScreenDims.height);
                     state.positionHistory.forEach((pos, index) => {
-                        const trailDot = document.createElementNS(svgNS, 'ellipse'); // Use ellipse for trail too
+                        const trailDot = document.createElementNS(svgNS, 'ellipse'); // Utilise aussi une ellipse pour la traînée.
                         const opacity = (index / TRAIL_LENGTH);
                         const baseTrailRadius = (smallestDim * 0.005) + (index / TRAIL_LENGTH) * (smallestDim * 0.025);
                         
                         trailDot.setAttribute('cx', pos.x.toFixed(2));
                         trailDot.setAttribute('cy', pos.y.toFixed(2));
                         trailDot.setAttribute('rx', baseTrailRadius.toFixed(2));
-                        trailDot.setAttribute('ry', (baseTrailRadius * yCorrectionFactor).toFixed(2)); // Correct trail aspect ratio
-                        trailDot.setAttribute('fill', '#64748b'); // Use slate-500 for the trail
+                        trailDot.setAttribute('ry', (baseTrailRadius * yCorrectionFactor).toFixed(2)); // Corrige le ratio d'aspect de la traînée.
+                        trailDot.setAttribute('fill', '#64748b'); // Utilise slate-500 pour la traînée.
                         trailDot.setAttribute('class', 'trail-dot');
                         trailDot.style.opacity = opacity;
                         state.trail.appendChild(trailDot);
@@ -672,12 +673,12 @@
             const receivedTagIds = Object.keys(tagStates).filter(tagId => tagStates[tagId].updated);
             
             Object.keys(tagStates).forEach(tagId => {
-                // The server is the source of truth. If a tag is not in the latest update, it's gone.
-                // However, we add a grace period on the client-side to prevent flickering during
-                // very brief network issues.
+                // Le serveur est la source de vérité. Si un tag n'est pas dans la dernière mise à jour, il est parti.
+                // Cependant, nous ajoutons une période de grâce côté client pour éviter le scintillement
+                // lors de très brèves coupures réseau.
                 if (now - tagStates[tagId].lastSeen > TAG_STALE_MS) {
                     console.log(`Tag ${tagId} est obsolète. Suppression de l'interface.`);
-                    // Tag is stale, remove its UI elements
+                    // Le tag est obsolète, on supprime ses éléments UI.
                     tagStates[tagId].dot.remove();
                     tagStates[tagId].label.remove();
                     tagStates[tagId].trail.remove();
@@ -687,17 +688,17 @@
             });
         }
         
-        // --- Init ---
+        // --- Initialisation ---
         fetchAnchorConfig().then(() => {
-            // Any logic that depends on anchor positions can go here
+            // Toute logique qui dépend de la position des ancres peut aller ici.
         });
-        animateTrails(); // Start the animation loop
-        setInterval(checkStaleTags, 2000); // Periodically check for stale tags
-        displayScreenConfig(true);
+        animateTrails(); // Démarre la boucle d'animation.
+        setInterval(checkStaleTags, 2000); // Vérifie périodiquement les tags obsolètes.
+        displayScreenConfig(true); // Affiche la configuration de l'écran au chargement.
 
-        // --- Event Handlers ---
+        // --- Gestionnaires d'événements ---
         
-        // --- Aspect Ratio Correction Observer ---
+        // --- Observateur pour la correction du ratio d'aspect ---
         const projectionScreen = document.getElementById('projection-screen');
         const resizeObserver = new ResizeObserver(entries => {
             for (let entry of entries) {
@@ -713,13 +714,13 @@
             }
             const screenAspect = projectionScreen.clientWidth / projectionScreen.clientHeight;
             const viewBoxAspect = calibratedScreenDims.width / calibratedScreenDims.height;
-            // This is the correct formula to find the factor to squash the Y-axis by
+            // C'est la formule correcte pour trouver le facteur par lequel écraser l'axe Y.
             yCorrectionFactor = screenAspect / viewBoxAspect;
         }
 
         let isSmoothingEnabled = true;
 
-        // -- Smoothing Control Logic --
+        // -- Logique du contrôle de lissage --
         const smoothingSlider = document.getElementById('smoothing-slider');
         const smoothingValue = document.getElementById('smoothing-value');
         const smoothingToggle = document.getElementById('smoothing-toggle');
@@ -728,11 +729,11 @@
             const level = parseInt(e.target.value, 10); // 0-100
             smoothingValue.textContent = level;
 
-            const t = level / 100.0; // Normalized level (0.0 to 1.0)
+            const t = level / 100.0; // Niveau normalisé (0.0 à 1.0)
             
-            // This is the "zoomed-in" scale. 
-            // 0% on the slider is the old 65% setting.
-            // 100% on the slider is the old 100% setting.
+            // C'est une échelle "zoomée". 
+            // 0% sur le curseur correspond à l'ancien réglage de 65%.
+            // 100% sur le curseur correspond à l'ancien réglage de 100%.
             const minCutoff = 0.0466 + t * (0.001 - 0.0466);
             const beta = 0.00294 + t * (0.0001 - 0.00294);
 
@@ -750,7 +751,7 @@
             smoothingSlider.classList.toggle('opacity-50', !isSmoothingEnabled);
         });
 
-        // -- Settings Modal Logic --
+        // -- Logique de la modale de réglages --
         const settingsBtn = document.getElementById('settings-btn');
         const settingsModal = document.getElementById('settings-modal');
         const closeModalBtn = document.getElementById('close-modal-btn');
@@ -759,7 +760,7 @@
         const anchorFormContainer = anchorForm.querySelector('.grid');
         const manualSaveBtn = document.getElementById('manual-save-btn');
 
-        // -- Calibration Logic --
+        // -- Logique de la calibration --
         const calibBtn = document.getElementById('start-screen-calib-btn');
         const wizardPanel = document.getElementById('wizard-panel');
         const calibTarget = document.getElementById('calibration-target');
@@ -770,7 +771,7 @@
 
         function runCalibrationStep(step) {
             if (step >= totalCalibSteps) {
-                // All points recorded, now trigger calculation
+                // Tous les points sont enregistrés, on déclenche le calcul.
                 wizardInstruction.textContent = "Tous les points enregistrés. Calcul en cours...";
                 recordPointBtn.classList.add('hidden');
                 cancelCalibBtn.classList.add('hidden');
@@ -780,7 +781,7 @@
             }
             const stepData = calibTargetPoints[step];
             
-            // Move wizard panel to top if target is at the bottom to avoid overlap
+            // Déplace le panneau de l'assistant en haut si la cible est en bas pour éviter le chevauchement.
             if (stepData.pos.top === '95%') {
                 wizardPanel.classList.remove('bottom-8');
                 wizardPanel.classList.add('top-8');
@@ -819,12 +820,12 @@
             wizardInstruction.textContent = success ? "Calibration terminée et enregistrée !" : "Calibration annulée.";
             isCalibrating = false;
             calibTarget.classList.add('hidden');
-            // Move panel back to the bottom when finished
+            // Replace le panneau en bas à la fin.
             wizardPanel.classList.remove('top-8');
             wizardPanel.classList.add('bottom-8');
             setTimeout(() => wizardPanel.classList.add('hidden'), 3000);
             if (success) {
-                displayScreenConfig(true); // Refresh main display with new config
+                displayScreenConfig(true); // Rafraîchit l'affichage principal avec la nouvelle config.
             }
         }
 
@@ -840,23 +841,23 @@
                 return;
             }
 
-            // --- Start Animation ---
+            // --- Démarrage de l'animation ---
             recordPointBtn.disabled = true;
             calibTarget.classList.add('is-recording');
             const timerPath = document.getElementById('calibration-timer-path');
-            // Reset animation before starting
+            // Réinitialise l'animation avant de la démarrer.
             timerPath.style.transition = 'none';
             timerPath.style.strokeDashoffset = '251.2';
-            // Force reflow to apply the reset instantly
+            // Force le rafraîchissement du DOM pour appliquer la réinitialisation instantanément.
             setTimeout(() => {
-                // Start the 5s animation
+                // Démarre l'animation de 5s.
                 timerPath.style.transition = 'stroke-dashoffset 5s linear';
                 timerPath.style.strokeDashoffset = '0';
             }, 10);
 
             const payload = {
                 step_index: currentCalibStep,
-                tracker_id: 'T0' // Hardcode to T0 as requested
+                tracker_id: 'T0' // Fixé sur T0 comme demandé.
             };
 
             fetch('/api/calibrate/record_point', {
@@ -874,7 +875,7 @@
                 }
             })
             .finally(() => {
-                 // Reset for next step
+                 // Réinitialise pour la prochaine étape.
                 recordPointBtn.disabled = false;
                 calibTarget.classList.remove('is-recording');
             });
@@ -913,37 +914,37 @@
                         const config = data.config;
                         const formatVec = (v) => `[${v.map(n => n.toFixed(1)).join(', ')}]`;
                         
-                        // Update settings modal
+                        // Met à jour la modale des réglages.
                         contentDiv.innerHTML = `
                             <span class="text-slate-400">Point Bas-Gauche:</span> <span>${formatVec(config.origin)}</span>
                             <span class="text-slate-400">Taille:</span> <span>${config.width_cm.toFixed(1)}cm x ${config.height_cm.toFixed(1)}cm</span>
                         `;
                         displayDiv.classList.remove('hidden');
 
-                        // Store dimensions and full geometry for UI display and calculations
+                        // Stocke les dimensions et la géométrie complète pour l'affichage et les calculs.
                         calibratedScreenDims = { width: config.width_cm, height: config.height_cm };
                         screenGeometry = {
-                            origin: config.origin, // in cm
-                            vec_x: config.vec_x,   // in cm
-                            vec_y: config.vec_y    // in cm
+                            origin: config.origin, // en cm
+                            vec_x: config.vec_x,   // en cm
+                            vec_y: config.vec_y    // en cm
                         };
                         
-                        // Dynamically set the SVG viewBox to match the calibrated screen aspect ratio
+                        // Définit dynamiquement la viewBox du SVG pour correspondre au ratio d'aspect de l'écran calibré.
                         svg.setAttribute('viewBox', `0 0 ${config.width_cm} ${config.height_cm}`);
-                        updateAspectRatioCorrection(); // Update correction factor now that viewbox is set
+                        updateAspectRatioCorrection(); // Met à jour le facteur de correction maintenant que la viewBox est définie.
                         drawRulersAndGrid(config.width_cm, config.height_cm);
 
-                        // Optionally, update main screen display
+                        // Optionnellement, met à jour l'affichage principal.
                         if (updateMainDisplay) {
                              const origin = config.origin;
                              const vec_x = config.vec_x;
                              const vec_y = config.vec_y;
 
-                             // Calculate corners in cm
-                            const bl = origin; // bottom-left
-                            const br = [origin[0] + vec_x[0], origin[1] + vec_x[1], origin[2] + vec_x[2]]; // bottom-right
-                            const tl = [origin[0] + vec_y[0], origin[1] + vec_y[1], origin[2] + vec_y[2]]; // top-left
-                            const tr = [tl[0] + vec_x[0], tl[1] + vec_x[1], tl[2] + vec_x[2]]; // top-right
+                             // Calcule les coins en cm.
+                            const bl = origin; // bottom-left (bas-gauche)
+                            const br = [origin[0] + vec_x[0], origin[1] + vec_x[1], origin[2] + vec_x[2]]; // bottom-right (bas-droit)
+                            const tl = [origin[0] + vec_y[0], origin[1] + vec_y[1], origin[2] + vec_y[2]]; // top-left (haut-gauche)
+                            const tr = [tl[0] + vec_x[0], tl[1] + vec_x[1], tl[2] + vec_x[2]]; // top-right (haut-droit)
                             
                             const formatCorner = (name, vec) => `
                                 <div class="flex items-center gap-1">
@@ -971,9 +972,9 @@
                         mainInfoDiv.classList.add('hidden');
                         calibratedScreenDims = { width: null, height: null };
                         screenGeometry = { origin: null, vec_x: null, vec_y: null };
-                        // Reset to a default viewbox if no calibration exists
+                        // Réinitialise à une viewBox par défaut si aucune calibration n'existe.
                         svg.setAttribute('viewBox', `0 0 435 250`);
-                        document.getElementById('rulers-group').innerHTML = ''; // Clear rulers
+                        document.getElementById('rulers-group').innerHTML = ''; // Efface les règles.
                     }
                 });
         }
@@ -982,14 +983,14 @@
             const rulersGroup = document.getElementById('rulers-group');
             if (!rulersGroup || !width_cm || !height_cm) return;
 
-            rulersGroup.innerHTML = ''; // Clear old rulers
+            rulersGroup.innerHTML = ''; // Efface les anciennes règles.
             const svgNS = "http://www.w3.org/2000/svg";
-            const gridColor = 'rgba(51, 65, 85, 0.5)'; // slate-700 with alpha
+            const gridColor = 'rgba(51, 65, 85, 0.5)'; // slate-700 avec alpha
             const strokeColor = '#334155'; // slate-700
             const textColor = '#64748b'; // slate-500
             const lineThickness = (Math.min(width_cm, height_cm) / 500).toFixed(2);
 
-            // Font size relative to the display height for readability.
+            // Taille de la police relative à la hauteur de l'affichage pour la lisibilité.
             const fontSize = height_cm / 35; 
             const tickLength = fontSize * 1.2;
             const textOffset = fontSize * 0.4;
@@ -1002,7 +1003,7 @@
                 return meters;
             };
 
-            // --- X-Axis Ruler (Bottom) ---
+            // --- Règle axe X (en bas) ---
             const xTickInterval_cm = width_cm > 150 ? 40 : 20;
             const numTicksX = Math.floor(width_cm / xTickInterval_cm);
             
@@ -1038,13 +1039,13 @@
                 rulersGroup.appendChild(label);
             }
             
-            // --- Y-Axis Ruler (Left) ---
+            // --- Règle axe Y (à gauche) ---
             const yTickInterval_cm = 10;
             const numTicksY = Math.floor(height_cm / yTickInterval_cm);
 
             for (let i = 0; i <= numTicksY; i++) {
                 const y_cm_from_bottom = i * yTickInterval_cm;
-                const y_svg = height_cm - y_cm_from_bottom; 
+                const y_svg = height_cm - y_cm_from_bottom; // L'axe Y du SVG est inversé.
                 
                 const gridLineY = document.createElementNS(svgNS, 'line');
                 gridLineY.setAttribute('x1', 0);
@@ -1068,7 +1069,7 @@
                     const label = document.createElementNS(svgNS, 'text');
                     label.setAttribute('x', tickLength + textOffset);
                     label.setAttribute('y', y_svg);
-                    label.setAttribute('dy', '0.35em'); // Vertically center
+                    label.setAttribute('dy', '0.35em'); // Centre verticalement
                     label.setAttribute('class', 'ruler-text');
                     label.setAttribute('font-size', fontSize.toFixed(2));
                     label.setAttribute('text-anchor', 'start');
@@ -1080,13 +1081,13 @@
         }
 
         const openModal = () => {
-            displayScreenConfig(); // Try to show config every time modal is opened
-            fetchAnchorConfig().then(() => { // Ensure latest config is loaded before showing
-                anchorFormContainer.innerHTML = ''; // Clear previous form
+            displayScreenConfig(); // Tente d'afficher la config chaque fois que la modale est ouverte.
+            fetchAnchorConfig().then(() => { // S'assure que la dernière config est chargée avant d'afficher.
+                anchorFormContainer.innerHTML = ''; // Vide le formulaire précédent.
                 const anchorIds = Object.keys(anchorPositions).sort();
 
                 anchorIds.forEach(id => {
-                    // anchorPositions is in meters, form needs cm. Round to avoid float issues.
+                    // anchorPositions est en mètres, le formulaire a besoin de cm. On arrondit pour éviter les problèmes de flottants.
                     const pos_m = anchorPositions[id];
                     const pos_cm = { 
                         x: Math.round(pos_m.x * 100), 
@@ -1148,11 +1149,11 @@
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    // Success, the backend will now use the new coords.
-                    // We need to re-fetch the config to get the calculated screen dimensions if any.
-                    // The backend recalculates screen config automatically when anchors are updated.
+                    // Succès, le backend va maintenant utiliser les nouvelles coordonnées.
+                    // On doit re-fetch la config pour obtenir les dimensions d'écran calculées, le cas échéant.
+                    // Le backend recalcule automatiquement la config de l'écran lorsque les ancres sont mises à jour.
                     fetchAnchorConfig().then(() => {
-                        displayScreenConfig(true); // Redraw everything with new data
+                        displayScreenConfig(true); // Redessine tout avec les nouvelles données.
                         closeModal();
                     });
                 } else {
@@ -1198,7 +1199,7 @@
             });
         });
 
-        // -- Fullscreen Button Logic --
+        // -- Logique du bouton Plein Écran --
         const fullscreenBtn = document.getElementById('fullscreen-btn');
         if (fullscreenBtn) {
             fullscreenBtn.addEventListener('click', () => {
@@ -1212,7 +1213,7 @@
             });
         }
         
-        // Update button icon when fullscreen state changes (e.g. via Esc key)
+        // Met à jour l'icône du bouton lorsque l'état plein écran change (ex: via la touche Échap)
         document.addEventListener('fullscreenchange', () => {
             const fullscreenIcon = fullscreenBtn.querySelector('.material-icons-outlined');
             if (document.fullscreenElement) {
@@ -1222,7 +1223,7 @@
                 fullscreenIcon.textContent = 'fullscreen';
                 fullscreenBtn.title = 'Plein Écran';
             }
-            });
+        });
     });
     </script>
 </body>
