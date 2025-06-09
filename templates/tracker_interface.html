@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UWB Real-Time Tracking</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Material Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+    <!-- Favicon -->
+    <link href="https://placehold.co/32x32/1E293B/94A3B8?text=UWB" rel="icon" type="image/png">
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- 1 Euro Filter -->
+    <script src="{{ url_for('static', filename='one_euro_filter.js') }}"></script>
+
+    <style>
+        body {
+            font-family: 'Sora', sans-serif;
+            background-color: #020617; /* slate-950 */
+            background-image: radial-gradient(circle at 1px 1px, #1e293b 1px, transparent 0);
+            background-size: 2rem 2rem;
+            overflow: hidden; /* Prevent body scrollbars */
+        }
+        .tracker-dot, .trail-dot {
+            transition: cx 0.1s linear, cy 0.1s linear;
+        }
+        .anchor-text {
+            /* font-size is now set dynamically in JS */
+            fill: #94a3b8; /* slate-400 */
+            text-anchor: middle;
+            font-weight: 500;
+        }
+        .tag-card, .tag-dot {
+            transition: opacity 0.5s ease-in-out;
+        }
+        /* Custom scrollbar for the top panel */
+        #trackers-sidebar::-webkit-scrollbar {
+            height: 8px;
+        }
+        #trackers-sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        #trackers-sidebar::-webkit-scrollbar-thumb {
+            background-color: #1e293b; /* slate-800 */
+            border-radius: 4px;
+        }
+        #trackers-sidebar::-webkit-scrollbar-thumb:hover {
+            background-color: #334155; /* slate-700 */
+        }
+        
+        .ruler-text {
+            font-family: 'Sora', sans-serif;
+            font-weight: 500;
+        }
+
+        #smoothing-toggle:checked + label {
+            background-color: #0ea5e9; /* sky-500 */
+        }
+
+        #smoothing-toggle:checked + label span {
+            transform: translateX(1.5rem); /* 24px */
+        }
+        
+        /* --- Animated Title --- */
+        .animated-title {
+            font-family: 'Sora', sans-serif; /* Using main font for consistency */
+            --tw-gradient-from: #0ea5e9; /* sky-500 */
+            --tw-gradient-to: #a855f7; /* purple-500 */
+            --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+            background-image: linear-gradient(to right, var(--tw-gradient-stops));
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            animation: text-flow 6s ease-in-out infinite;
+            font-weight: 700;
+            font-size: 1.25rem; /* text-xl */
+        }
+
+        @keyframes text-flow {
+            0%, 100% {
+                background-size: 200% 200%;
+                background-position: left center;
+            }
+            50% {
+                background-size: 200% 200%;
+                background-position: right center;
+            }
+        }
+
+        #projection-screen {
+            /* ... existing styles ... */
+            --timer-color: #0ea5e9; /* sky-500 */
+        }
+        #calibration-timer-path {
+            stroke: var(--timer-color);
+            stroke-width: 10; /* Make it thicker */
+            fill: transparent;
+            transform-origin: center;
+            transform: rotate(-90deg);
+            stroke-dasharray: 251.2; /* Circumference of a 40-radius circle */
+            stroke-dashoffset: 251.2;
+            /* No transition here, we use JS for start/end */
+        }
+        #calibration-timer-track {
+             stroke: #334155; /* slate-700 */
+             stroke-width: 10;
+             fill: transparent;
+        }
+        /* Stop the pulse animation during recording for better focus */
+        #calibration-target.is-recording .animate-pulse {
+            animation: none;
+        }
+    </style>
+</head>
+<body class="text-slate-300 antialiased flex flex-col h-screen">
+
+    <!-- Top Panel: Data -->
+    <div id="top-panel" class="w-full h-1/4 p-4 lg:p-6 flex flex-col gap-4">
+        <header class="flex items-center justify-between gap-6">
+            <h1 class="animated-title flex-shrink-0">Interface de Tracking UWB</h1>
+            
+            <!-- Smoothing Control -->
+            <div class="flex items-center gap-4 flex-grow max-w-lg">
+                <label for="smoothing-slider" class="text-sm font-medium text-slate-400 flex-shrink-0">Lissage</label>
+                <input id="smoothing-slider" type="range" min="0" max="100" value="50" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer transition-opacity">
+                <span id="smoothing-value" class="font-mono text-base font-semibold text-sky-300 w-12 text-center">50</span>
+                <!-- On/Off Toggle -->
+                <div class="flex items-center">
+                    <input type="checkbox" id="smoothing-toggle" class="peer hidden" checked>
+                    <label for="smoothing-toggle" class="w-12 h-6 bg-slate-600 rounded-full flex items-center p-1 cursor-pointer transition-colors duration-300 ease-in-out">
+                        <span class="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-300 ease-in-out"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-4 text-sm text-slate-400 flex-shrink-0">
+                <div id="main-screen-info" class="hidden flex items-center gap-4 text-xs font-mono pr-4 border-r border-slate-700">
+                    <!-- Les dimensions calibrées seront affichées ici -->
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="material-icons-outlined text-lg text-green-400 animate-pulse">sensors</span>
+                    <span id="connectionStatus">Connexion...</span>
+                </div>
+                <button id="settings-btn" title="Réglages des Ancres" class="p-1 rounded-md hover:bg-slate-700 hover:text-white transition-colors">
+                    <span class="material-icons-outlined">settings</span>
+                </button>
+                <button id="fullscreen-btn" title="Plein Écran" class="p-1 rounded-md hover:bg-slate-700 hover:text-white transition-colors">
+                    <span class="material-icons-outlined">fullscreen</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Tracker Cards Container -->
+        <div id="trackers-sidebar" class="flex-1 flex flex-row items-stretch gap-4 overflow-x-auto pb-2">
+            <!-- Les cartes des trackers seront insérées dynamiquement ici -->
+        </div>
+    </div>
+
+    <!-- Bottom Panel: Visualization -->
+    <main id="bottom-panel" class="w-full h-3/4 p-4 pt-0 relative">
+        <div id="projection-screen" class="w-full h-full bg-slate-900/50 backdrop-blur-sm border-[3px] border-white rounded-xl p-2 overflow-hidden">
+            <svg id="tracker2DScene" width="100%" height="100%" viewBox="0 0 435 250" preserveAspectRatio="none">
+                <g id="rulers-group"></g>
+                <!-- Trails and Dots will be added here -->
+                <g id="tracker-trails-group"></g>
+                <g id="tracker-dots-group"></g>
+            </svg>
+             <!-- Calibration Target -->
+            <div id="calibration-target" class="hidden absolute w-20 h-20 transform -translate-x-1/2 -translate-y-1/2">
+                <div class="w-full h-full relative animate-pulse">
+                    <div class="absolute inset-0 rounded-full border-2 border-cyan-400 opacity-50"></div>
+                    <div class="absolute inset-2 rounded-full border-2 border-cyan-400 opacity-75"></div>
+                    <div class="w-1 h-1 bg-cyan-400 rounded-full absolute top-1/2 left-1/2 -mt-0.5 -ml-0.5"></div>
+                    <!-- Timer SVG -->
+                    <svg class="absolute inset-0 w-full h-full" viewBox="0 0 100 100">
+                        <path id="calibration-timer-track" d="M 50,50 m -40,0 a 40,40 0 1,1 80,0 a 40,40 0 1,1 -80,0"></path>
+                        <path id="calibration-timer-path" d="M 50,50 m -40,0 a 40,40 0 1,1 80,0 a 40,40 0 1,1 -80,0"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+         <!-- Calibration Wizard Panel -->
+        <div id="wizard-panel" class="hidden absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-lg shadow-2xl p-4 flex items-center gap-6">
+            <div class="flex items-center gap-3">
+                <span id="wizard-spinner" class="animate-spin h-5 w-5 border-2 border-sky-400 border-t-transparent rounded-full"></span>
+                <p id="wizard-instruction" class="text-sky-300 font-medium">Lancement de la calibration...</p>
+            </div>
+            <div class="flex gap-2">
+                 <button id="record-point-btn" class="py-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 font-semibold transition-colors">Enregistrer Point (1/10)</button>
+                 <button id="cancel-calib-btn" class="py-2 px-4 rounded-lg bg-slate-600 hover:bg-slate-500 transition-colors">Annuler</button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-slate-800 text-slate-200 rounded-2xl shadow-2xl w-full max-w-2xl border border-slate-700">
+            <div class="flex items-center justify-between p-4 border-b border-slate-700">
+                <h3 class="text-lg font-bold">Configuration des Ancres</h3>
+                <button id="close-modal-btn" class="p-1 rounded-full hover:bg-slate-700">&times;</button>
+            </div>
+            <form id="anchor-form" class="p-6">
+                <p class="text-sm text-slate-400 mb-6">Entrez les coordonnées 3D de chaque ancre en centimètres.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                    <!-- Les champs pour les ancres A0 à A3 sont générés par JS -->
+                </div>
+                
+                <!-- Manual Screen Configuration -->
+                <div class="mt-6 pt-6 border-t border-slate-700">
+                     <h4 class="font-bold text-indigo-400 mb-4">Configuration Manuelle de l'Écran</h4>
+                     <div class="grid grid-cols-2 gap-x-8 gap-y-4">
+                        <!-- Left Column: Dimensions -->
+                        <div class="flex flex-col gap-y-4">
+                            <label class="block">
+                                <span class="text-xs text-slate-400">Largeur (cm)</span>
+                                <input type="number" step="0.1" id="manual_screen_width" placeholder="220.5" class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                            </label>
+                            <label class="block">
+                                <span class="text-xs text-slate-400">Hauteur (cm)</span>
+                                <input type="number" step="0.1" id="manual_screen_height" placeholder="95.0" class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                            </label>
+                        </div>
+                        <!-- Right Column: Origin Point -->
+                        <div class="flex flex-col gap-y-4">
+                            <p class="text-xs text-slate-400 -mb-2">Coordonnées du Point Bas-Gauche (cm)</p>
+                             <div class="grid grid-cols-3 gap-2">
+                                <label class="block">
+                                    <span class="text-xs text-slate-400">X</span>
+                                    <input type="number" id="manual_origin_x" placeholder="15" class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                                </label>
+                                 <label class="block">
+                                    <span class="text-xs text-slate-400">Y</span>
+                                    <input type="number" id="manual_origin_y" placeholder="170" class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                                </label>
+                                 <label class="block">
+                                    <span class="text-xs text-slate-400">Z</span>
+                                    <input type="number" id="manual_origin_z" placeholder="40" class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                                </label>
+                            </div>
+                        </div>
+                     </div>
+                </div>
+
+                <!-- Screen Configuration Display -->
+                <div id="screen-config-display" class="hidden mt-6 pt-6 border-t border-slate-700">
+                    <h4 class="font-bold text-indigo-400 mb-2">Informations de l'Écran Calibré</h4>
+                    <div id="screen-config-content" class="text-sm text-slate-300 font-mono grid grid-cols-2 gap-x-4 gap-y-2">
+                        <!-- Le contenu sera injecté par JS -->
+                    </div>
+                </div>
+                <div class="mt-8 flex justify-end items-center gap-4">
+                    <button type="button" id="start-screen-calib-btn" class="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold transition-colors">Calibrer l'Écran</button>
+                    <button type="button" id="manual-save-btn" class="py-2 px-4 rounded-lg bg-teal-600 hover:bg-teal-500 font-semibold transition-colors">Sauvegarde Manuelle</button>
+                    <div class="flex-grow"></div>
+                    <button type="button" id="cancel-modal-btn" class="py-2 px-4 rounded-lg bg-slate-600 hover:bg-slate-500 transition-colors">Annuler</button>
+                    <button type="submit" class="py-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 font-semibold transition-colors">Enregistrer Ancres</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const socket = io();
+
+        // --- Config ---
+        let anchorPositions = {}; // Will be loaded from server
+        let calibratedScreenDims = { width: null, height: null }; // To store screen dimensions in cm
+        let screenGeometry = { origin: null, vec_x: null, vec_y: null }; // Will store full geometry in cm
+        let yCorrectionFactor = 1.0; // To fix aspect ratio distortion on dots/text
+        let isCalibrating = false;
+        let currentCalibStep = 0;
+        const totalCalibSteps = 10;
+        const calibTargetPoints = [
+            { name: 'Haut-Gauche',   uv: [0.05, 0.95], pos: { top: '5%',  left: '5%' } },
+            { name: 'Gauche-Milieu', uv: [0.05, 0.5],  pos: { top: '50%', left: '5%' } },
+            { name: 'Bas-Gauche',    uv: [0.05, 0.05], pos: { top: '95%', left: '5%' } },
+            { name: 'Intermédiaire', uv: [0.25, 0.75], pos: { top: '25%', left: '25%' } },
+            { name: 'Haut-Milieu',   uv: [0.5, 0.95],  pos: { top: '5%',  left: '50%' } },
+            { name: 'Centre',        uv: [0.5, 0.5],   pos: { top: '50%', left: '50%' } },
+            { name: 'Bas-Milieu',    uv: [0.5, 0.05],  pos: { top: '95%', left: '50%' } },
+            { name: 'Haut-Droit',    uv: [0.95, 0.95], pos: { top: '5%',  left: '95%' } },
+            { name: 'Droite-Milieu', uv: [0.95, 0.5],  pos: { top: '50%', left: '95%' } },
+            { name: 'Bas-Droit',     uv: [0.95, 0.05], pos: { top: '95%', left: '95%' } }
+        ];
+        
+        // Initial fetch of anchor positions
+        function fetchAnchorConfig() {
+            return fetch('/api/anchors')
+                .then(res => res.json())
+                .then(data => {
+                    console.log("Configuration des ancres chargée:", data.anchors);
+                    // Convert cm to meters for calculations
+                    for (const key in data.anchors) {
+                        anchorPositions[key] = {
+                            x: data.anchors[key].x / 100.0,
+                            y: data.anchors[key].y / 100.0,
+                            z: data.anchors[key].z / 100.0
+                        };
+                    }
+                })
+                .catch(error => console.error('Erreur de chargement de la configuration des ancres:', error));
+        }
+        
+        const TRAIL_LENGTH = 20; // Number of points in the trail
+        const TAG_STALE_MS = 10000; // Time before a tag is considered stale and removed
+
+        // --- DOM Elements ---
+        const connectionStatusElement = document.getElementById('connectionStatus');
+        const trackerDotsGroup = document.getElementById('tracker-dots-group');
+        const trackerTrailsGroup = document.getElementById('tracker-trails-group');
+        const trackersSidebar = document.getElementById('trackers-sidebar');
+
+        // --- State ---
+        let tagStates = {};
+        const tagColors = ['#22C55E', '#3B82F6', '#EF4444', '#EAB308', '#EC4899'];
+
+        const getTagColor = (index) => tagColors[index % tagColors.length];
+
+        socket.on('connect', () => {
+            const statusElement = document.getElementById('connectionStatus');
+            if (statusElement) {
+                statusElement.textContent = "Connecté";
+                const icon = statusElement.previousElementSibling;
+                if(icon) {
+                    icon.classList.remove('text-red-500');
+                    icon.classList.add('text-green-400', 'animate-pulse');
+                }
+            }
+        });
+
+        socket.on('disconnect', () => {
+            const statusElement = document.getElementById('connectionStatus');
+             if (statusElement) {
+                statusElement.textContent = "Déconnecté";
+                const icon = statusElement.previousElementSibling;
+                if(icon) {
+                    icon.classList.remove('text-green-400', 'animate-pulse');
+                    icon.classList.add('text-red-500');
+                }
+            }
+        });
+
+        // --- Socket.IO Handler ---
+        socket.on('uwb_update', function(data) {
+            const receivedTags = data.tags ? Object.keys(data.tags) : [];
+
+            // Mark all current tags as not updated
+            Object.values(tagStates).forEach(s => s.updated = false);
+
+            receivedTags.forEach(tagId => {
+                if (!tagStates[tagId]) {
+                    // Pass the initial data packet to the creation function
+                    createTagUI(tagId, data.tags[tagId]);
+                }
+                updateTagState(tagId, data.tags[tagId]);
+                tagStates[tagId].updated = true;
+            });
+             // Mark non-updated tags to be checked for staleness
+            Object.values(tagStates).forEach(state => {
+                if (!state.updated) {
+                    state.staleCheck = true; // Mark for potential removal
+                }
+            });
+        });
+
+        function createTagUI(tagId, initialTagData) {
+            const color = getTagColor(Object.keys(tagStates).length);
+            const svgNS = "http://www.w3.org/2000/svg";
+            
+            // Create SVG elements
+            const trail = document.createElementNS(svgNS, 'g');
+            trail.setAttribute('id', `trail-${tagId}`);
+            
+            const dot = document.createElementNS(svgNS, 'ellipse'); // Use ellipse to allow aspect ratio correction
+            dot.setAttribute('id', `dot-${tagId}`);
+            dot.setAttribute('rx', 8);
+            dot.setAttribute('ry', 8);
+            dot.setAttribute('fill', color);
+            dot.style.filter = `drop-shadow(0 0 5px ${color})`;
+            
+            const label = document.createElementNS(svgNS, 'text');
+            label.setAttribute('id', `label-${tagId}`);
+            label.textContent = tagId;
+            label.setAttribute('dy', -15);
+            label.setAttribute('class', 'anchor-text');
+            label.setAttribute('fill', color);
+
+            trackerTrailsGroup.appendChild(trail);
+            trackerDotsGroup.appendChild(dot);
+            trackerDotsGroup.appendChild(label);
+            
+            // Create sidebar card
+            const card = document.createElement('div');
+            card.className = 'tag-card bg-slate-900/50 border border-slate-800 rounded-xl p-4 flex flex-col gap-3 flex-shrink-0';
+            card.id = `card-${tagId}`;
+            card.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <span class="w-3 h-3 rounded-full" style="background-color: ${color};"></span>
+                        <h3 class="font-bold text-lg text-slate-100">${tagId}</h3>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div title="Fréquence de mise à jour" class="flex items-center gap-2 text-cyan-400">
+                             <span class="material-icons-outlined text-base">timer</span>
+                             <span id="freq-${tagId}" class="font-mono text-sm font-medium">-- Hz</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-x-4 text-sm font-mono border-t border-slate-800 pt-3">
+                    <!-- Distances 2x2 Grid -->
+                    <div id="dist-grid-${tagId}" class="grid grid-cols-2 gap-x-4 gap-y-1">
+                        ${Object.keys(anchorPositions).sort().map(anchorId => `
+                            <div class="flex justify-between items-baseline">
+                                <span class="text-slate-400">${anchorId}:</span>
+                                <span id="dist-${tagId}-${anchorId}" class="text-base font-medium text-slate-200 w-16 text-right">-.--m</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <!-- 3D Coords -->
+                    <div id="pos-grid-${tagId}" class="flex flex-col items-center justify-center gap-y-2 border-l border-slate-800 pl-4 text-center">
+                        <span class="text-xs text-slate-400 -mb-1">Position 3D (m)</span>
+                        <div class="flex gap-x-3">
+                            <div class="flex flex-col items-center">
+                                <span class="text-slate-400 text-xs">X</span>
+                                <span id="pos-${tagId}-x" class="text-base font-medium text-slate-200 w-16 text-center">-.--</span>
+                            </div>
+                            <div class="flex flex-col items-center">
+                                <span class="text-slate-400 text-xs">Y</span>
+                                <span id="pos-${tagId}-y" class="text-base font-medium text-slate-200 w-16 text-center">-.--</span>
+                            </div>
+                            <div class="flex flex-col items-center">
+                                <span class="text-slate-400 text-xs">Z</span>
+                                <span id="pos-${tagId}-z" class="text-base font-medium text-slate-200 w-16 text-center">-.--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="status-msg-${tagId}" class="text-center text-amber-400 text-sm py-2 border-t border-slate-800/50 mt-2 hidden">
+                    <!-- Status messages will be injected here -->
+                </div>
+            `;
+            trackersSidebar.appendChild(card);
+            
+            // --- OneEuroFilter Setup ---
+            // These parameters were tuned for the old coordinate system. They will feel
+            // different now that the coordinate system is in cm, but should still provide
+            // a good base for smoothing. The user can adjust the slider.
+            const initialFreq = 30.0; 
+            const defaultMinCutoff = 0.0238;
+            const defaultBeta = 0.00152;
+            
+            tagStates[tagId] = {
+                dot, label, trail, card, color,
+                filterX: new OneEuroFilter(initialFreq, defaultMinCutoff, defaultBeta),
+                filterY: new OneEuroFilter(initialFreq, defaultMinCutoff, defaultBeta),
+                positionHistory: [],
+                updateTimestamps: [], // For frequency calculation
+                lastSeen: Date.now(),
+                updated: true
+            };
+        }
+
+        function updateTagState(tagId, tagData) {
+            const state = tagStates[tagId];
+            const now = Date.now();
+            state.lastSeen = now;
+            state.updated = true;
+
+            // --- Frequency Calculation ---
+            state.updateTimestamps.push(now);
+            // Keep only the last 10 timestamps
+            if (state.updateTimestamps.length > 10) {
+                state.updateTimestamps.shift();
+            }
+            calculateAndDisplayFrequency(tagId);
+            // -------------------------
+
+            // --- Update UI Text ---
+            updateSidebarText(tagId, tagData);
+            
+            // --- Position Update ---
+            if(tagData.position_2d && tagData.status === 'tracking' && !isCalibrating && calibratedScreenDims.width !== null) {
+                let [u, v] = tagData.position_2d;
+                let isOffScreen = (u < 0 || u > 1 || v < 0 || v > 1);
+
+                if(isOffScreen) {
+                    state.dot.setAttribute('fill', '#EF4444'); // Red color for off-screen
+                } else {
+                    state.dot.setAttribute('fill', state.color); // Restore original color
+                }
+                
+                // Clamp the coordinates to the edges for filtering, so the dot smoothly approaches the border
+                const clampedU = Math.max(0, Math.min(1, u));
+                const clampedV = Math.max(0, Math.min(1, v));
+
+                const rawCmX = clampedU * calibratedScreenDims.width;
+                const rawCmY = (1 - clampedV) * calibratedScreenDims.height;
+                
+                let finalX = rawCmX;
+                let finalY = rawCmY;
+
+                if (isSmoothingEnabled) {
+                    // Apply One-Euro filter. It now filters cm values.
+                    const timestamp = now / 1000.0; // seconds
+                    finalX = state.filterX.filter(rawCmX, timestamp);
+                    finalY = state.filterY.filter(rawCmY, timestamp);
+                }
+                
+                 // Make dot size and label offset relative to screen size, and correct for aspect ratio
+                const smallestDim = Math.min(calibratedScreenDims.width, calibratedScreenDims.height);
+                const baseRadius = smallestDim * 0.025;
+                state.dot.setAttribute('rx', baseRadius.toFixed(2));
+                state.dot.setAttribute('ry', (baseRadius * yCorrectionFactor).toFixed(2));
+
+                // Font size based on height, make it much smaller
+                const labelFontSize = calibratedScreenDims.height / 37.5;
+                state.label.setAttribute('font-size', labelFontSize.toFixed(2));
+                
+                // Update label text with coordinates
+                const x_meters = (finalX / 100).toFixed(2);
+                const y_meters = (finalY / 100).toFixed(2);
+                state.label.textContent = `${tagId} (${x_meters}, ${y_meters})`;
+
+                // Apply inverse transform to the text to un-stretch it
+                if (yCorrectionFactor !== 0) {
+                     state.label.setAttribute('transform', `scale(1, ${1 / yCorrectionFactor})`);
+                }
+
+                // Adjust dy to place text above the ellipse
+                const verticalRadius = parseFloat(state.dot.getAttribute('ry'));
+                // The dy offset also needs to be corrected for the text's own transform
+                const correctedDy = - (verticalRadius + labelFontSize * 0.5) * yCorrectionFactor;
+                state.label.setAttribute('dy', correctedDy.toFixed(2));
+
+                state.dot.setAttribute('cx', finalX.toFixed(2));
+                state.dot.setAttribute('cy', finalY.toFixed(2));
+                state.label.setAttribute('x', finalX.toFixed(2));
+                state.label.setAttribute('y', finalY.toFixed(2));
+
+                state.positionHistory.push({ x: finalX, y: finalY });
+                if (state.positionHistory.length > TRAIL_LENGTH) {
+                    state.positionHistory.shift();
+                }
+
+            } else {
+                // Hide dot if position is invalid or not tracking
+                state.dot.setAttribute('cx', -100);
+                state.dot.setAttribute('cy', -100);
+                state.label.setAttribute('x', -100);
+                state.label.setAttribute('y', -100);
+            }
+        }
+        
+        function updateSidebarText(tagId, tagData) {
+            // Update distances (backend sends them in meters)
+            Object.keys(anchorPositions).forEach(anchorId => {
+                const el = document.getElementById(`dist-${tagId}-${anchorId}`);
+                if (el) {
+                    const dist_m = tagData.distances[anchorId];
+                    el.textContent = (dist_m !== null) ? `${dist_m.toFixed(2)}m` : '-.--m';
+                }
+            });
+
+            // Update 3D position (backend sends it in meters)
+            const pos3d_m = tagData.position_3d;
+            document.getElementById(`pos-${tagId}-x`).textContent = pos3d_m ? `${pos3d_m[0].toFixed(2)}` : '-.--';
+            document.getElementById(`pos-${tagId}-y`).textContent = pos3d_m ? `${pos3d_m[1].toFixed(2)}` : '-.--';
+            document.getElementById(`pos-${tagId}-z`).textContent = pos3d_m ? `${pos3d_m[2].toFixed(2)}` : '-.--';
+
+            // Update frequency
+            calculateAndDisplayFrequency(tagId);
+
+            // Update status message
+            const distGrid = document.getElementById(`dist-grid-${tagId}`);
+            const posGrid = document.getElementById(`pos-grid-${tagId}`);
+            const statusMsg = document.getElementById(`status-msg-${tagId}`);
+
+            if (distGrid && statusMsg && posGrid) {
+                let message = '';
+                switch(tagData.status) {
+                    case 'solver_failed':
+                        message = "Position 3D impossible à calculer. Rapprochez le tracker.";
+                        break;
+                    case 'needs_calibration':
+                        message = "Le système doit être calibré pour la 2D.";
+                        break;
+                    case 'receiving':
+                        message = "En attente des données de distance...";
+                        break;
+                }
+
+                if (message) {
+                    statusMsg.textContent = message;
+                    statusMsg.classList.remove('hidden');
+                    distGrid.classList.add('hidden');
+                    posGrid.classList.add('hidden');
+                } else {
+                    statusMsg.classList.add('hidden');
+                    distGrid.classList.remove('hidden');
+                    posGrid.classList.remove('hidden');
+                }
+            }
+        }
+
+        function calculateAndDisplayFrequency(tagId) {
+            const state = tagStates[tagId];
+            const freqEl = document.getElementById(`freq-${tagId}`);
+            if (!freqEl || state.updateTimestamps.length < 2) {
+                if (freqEl) freqEl.textContent = '-- Hz';
+                return;
+            }
+
+            const timestamps = state.updateTimestamps;
+            const deltas = [];
+            for (let i = 1; i < timestamps.length; i++) {
+                deltas.push(timestamps[i] - timestamps[i - 1]);
+            }
+
+            const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+            
+            if (avgDelta > 0) {
+                const frequency = 1000 / avgDelta;
+                freqEl.textContent = `${frequency.toFixed(1)} Hz`;
+            } else {
+                freqEl.textContent = 'inf Hz';
+            }
+        }
+        
+        function updateTag2DPosition(tagId, distances) {
+            // This function is now OBSOLETE as position is calculated on the backend.
+            // All logic is now in updateTagState.
+            return;
+        }
+        
+        function animateTrails() {
+            const svgNS = "http://www.w3.org/2000/svg";
+            Object.values(tagStates).forEach(state => {
+                // Clear previous trail
+                while (state.trail.firstChild) {
+                    state.trail.removeChild(state.trail.firstChild);
+                }
+                 // Redraw trail
+                if (calibratedScreenDims.width !== null) {
+                    const smallestDim = Math.min(calibratedScreenDims.width, calibratedScreenDims.height);
+                    state.positionHistory.forEach((pos, index) => {
+                        const trailDot = document.createElementNS(svgNS, 'ellipse'); // Use ellipse for trail too
+                        const opacity = (index / TRAIL_LENGTH);
+                        const baseTrailRadius = (smallestDim * 0.005) + (index / TRAIL_LENGTH) * (smallestDim * 0.025);
+                        
+                        trailDot.setAttribute('cx', pos.x.toFixed(2));
+                        trailDot.setAttribute('cy', pos.y.toFixed(2));
+                        trailDot.setAttribute('rx', baseTrailRadius.toFixed(2));
+                        trailDot.setAttribute('ry', (baseTrailRadius * yCorrectionFactor).toFixed(2)); // Correct trail aspect ratio
+                        trailDot.setAttribute('fill', '#64748b'); // Use slate-500 for the trail
+                        trailDot.setAttribute('class', 'trail-dot');
+                        trailDot.style.opacity = opacity;
+                        state.trail.appendChild(trailDot);
+                    });
+                }
+            });
+            requestAnimationFrame(animateTrails);
+        }
+
+        function checkStaleTags() {
+            const now = Date.now();
+            const receivedTagIds = Object.keys(tagStates).filter(tagId => tagStates[tagId].updated);
+            
+            Object.keys(tagStates).forEach(tagId => {
+                // The server is the source of truth. If a tag is not in the latest update, it's gone.
+                // However, we add a grace period on the client-side to prevent flickering during
+                // very brief network issues.
+                if (now - tagStates[tagId].lastSeen > TAG_STALE_MS) {
+                    console.log(`Tag ${tagId} est obsolète. Suppression de l'interface.`);
+                    // Tag is stale, remove its UI elements
+                    tagStates[tagId].dot.remove();
+                    tagStates[tagId].label.remove();
+                    tagStates[tagId].trail.remove();
+                    tagStates[tagId].card.remove();
+                    delete tagStates[tagId];
+                }
+            });
+        }
+        
+        // --- Init ---
+        fetchAnchorConfig().then(() => {
+            // Any logic that depends on anchor positions can go here
+        });
+        animateTrails(); // Start the animation loop
+        setInterval(checkStaleTags, 2000); // Periodically check for stale tags
+        displayScreenConfig(true);
+
+        // --- Event Handlers ---
+        
+        // --- Aspect Ratio Correction Observer ---
+        const projectionScreen = document.getElementById('projection-screen');
+        const resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                updateAspectRatioCorrection();
+            }
+        });
+        resizeObserver.observe(projectionScreen);
+
+        function updateAspectRatioCorrection() {
+            if (!calibratedScreenDims.width || !calibratedScreenDims.height || !projectionScreen.clientHeight || projectionScreen.clientHeight === 0) {
+                yCorrectionFactor = 1.0;
+                return;
+            }
+            const screenAspect = projectionScreen.clientWidth / projectionScreen.clientHeight;
+            const viewBoxAspect = calibratedScreenDims.width / calibratedScreenDims.height;
+            // This is the correct formula to find the factor to squash the Y-axis by
+            yCorrectionFactor = screenAspect / viewBoxAspect;
+        }
+
+        let isSmoothingEnabled = true;
+
+        // -- Smoothing Control Logic --
+        const smoothingSlider = document.getElementById('smoothing-slider');
+        const smoothingValue = document.getElementById('smoothing-value');
+        const smoothingToggle = document.getElementById('smoothing-toggle');
+
+        smoothingSlider.addEventListener('input', (e) => {
+            const level = parseInt(e.target.value, 10); // 0-100
+            smoothingValue.textContent = level;
+
+            const t = level / 100.0; // Normalized level (0.0 to 1.0)
+            
+            // This is the "zoomed-in" scale. 
+            // 0% on the slider is the old 65% setting.
+            // 100% on the slider is the old 100% setting.
+            const minCutoff = 0.0466 + t * (0.001 - 0.0466);
+            const beta = 0.00294 + t * (0.0001 - 0.00294);
+
+            Object.values(tagStates).forEach(state => {
+                state.filterX.setMinCutoff(minCutoff);
+                state.filterX.setBeta(beta);
+                state.filterY.setMinCutoff(minCutoff);
+                state.filterY.setBeta(beta);
+            });
+        });
+
+        smoothingToggle.addEventListener('change', (e) => {
+            isSmoothingEnabled = e.target.checked;
+            smoothingSlider.disabled = !isSmoothingEnabled;
+            smoothingSlider.classList.toggle('opacity-50', !isSmoothingEnabled);
+        });
+
+        // -- Settings Modal Logic --
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsModal = document.getElementById('settings-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const cancelModalBtn = document.getElementById('cancel-modal-btn');
+        const anchorForm = document.getElementById('anchor-form');
+        const anchorFormContainer = anchorForm.querySelector('.grid');
+        const manualSaveBtn = document.getElementById('manual-save-btn');
+
+        // -- Calibration Logic --
+        const calibBtn = document.getElementById('start-screen-calib-btn');
+        const wizardPanel = document.getElementById('wizard-panel');
+        const calibTarget = document.getElementById('calibration-target');
+        const wizardInstruction = document.getElementById('wizard-instruction');
+        const recordPointBtn = document.getElementById('record-point-btn');
+        const cancelCalibBtn = document.getElementById('cancel-calib-btn');
+        const wizardSpinner = document.getElementById('wizard-spinner');
+
+        function runCalibrationStep(step) {
+            if (step >= totalCalibSteps) {
+                // All points recorded, now trigger calculation
+                wizardInstruction.textContent = "Tous les points enregistrés. Calcul en cours...";
+                recordPointBtn.classList.add('hidden');
+                cancelCalibBtn.classList.add('hidden');
+                wizardSpinner.classList.remove('hidden');
+                calculateCalibration();
+                return;
+            }
+            const stepData = calibTargetPoints[step];
+            
+            // Move wizard panel to top if target is at the bottom to avoid overlap
+            if (stepData.pos.top === '95%') {
+                wizardPanel.classList.remove('bottom-8');
+                wizardPanel.classList.add('top-8');
+            } else {
+                wizardPanel.classList.remove('top-8');
+                wizardPanel.classList.add('bottom-8');
+            }
+
+            wizardInstruction.textContent = `Placez le tracker sur le point '${stepData.name}' et appuyez sur Enregistrer.`;
+            recordPointBtn.textContent = `Enregistrer Point (${step + 1}/${totalCalibSteps})`;
+            Object.assign(calibTarget.style, stepData.pos);
+        }
+
+        function startCalibration() {
+            closeModal();
+            fetch('/api/calibrate/start', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        isCalibrating = true;
+                        currentCalibStep = 0;
+                        recordPointBtn.classList.remove('hidden');
+                        recordPointBtn.disabled = false;
+                        cancelCalibBtn.classList.remove('hidden');
+                        wizardSpinner.classList.add('hidden');
+                        wizardPanel.classList.remove('hidden');
+                        calibTarget.classList.remove('hidden');
+                        runCalibrationStep(currentCalibStep);
+                    } else {
+                        alert("Erreur au démarrage de la calibration.");
+                    }
+                });
+        }
+
+        function finishCalibration(success = true) {
+            wizardInstruction.textContent = success ? "Calibration terminée et enregistrée !" : "Calibration annulée.";
+            isCalibrating = false;
+            calibTarget.classList.add('hidden');
+            // Move panel back to the bottom when finished
+            wizardPanel.classList.remove('top-8');
+            wizardPanel.classList.add('bottom-8');
+            setTimeout(() => wizardPanel.classList.add('hidden'), 3000);
+            if (success) {
+                displayScreenConfig(true); // Refresh main display with new config
+            }
+        }
+
+        function cancelCalibration() {
+            fetch('/api/calibrate/cancel', { method: 'POST' });
+            finishCalibration(false);
+        }
+
+        recordPointBtn.addEventListener('click', () => {
+            const trackerIds = Object.keys(tagStates);
+            if (trackerIds.length === 0 || !tagStates['T0']) {
+                alert("Le tracker de référence 'T0' n'est pas actif.");
+                return;
+            }
+
+            // --- Start Animation ---
+            recordPointBtn.disabled = true;
+            calibTarget.classList.add('is-recording');
+            const timerPath = document.getElementById('calibration-timer-path');
+            // Reset animation before starting
+            timerPath.style.transition = 'none';
+            timerPath.style.strokeDashoffset = '251.2';
+            // Force reflow to apply the reset instantly
+            setTimeout(() => {
+                // Start the 5s animation
+                timerPath.style.transition = 'stroke-dashoffset 5s linear';
+                timerPath.style.strokeDashoffset = '0';
+            }, 10);
+
+            const payload = {
+                step_index: currentCalibStep,
+                tracker_id: 'T0' // Hardcode to T0 as requested
+            };
+
+            fetch('/api/calibrate/record_point', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    currentCalibStep++;
+                    runCalibrationStep(currentCalibStep);
+                } else {
+                    alert('Erreur durant l\'enregistrement du point : ' + data.message);
+                }
+            })
+            .finally(() => {
+                 // Reset for next step
+                recordPointBtn.disabled = false;
+                calibTarget.classList.remove('is-recording');
+            });
+        });
+        
+        function calculateCalibration() {
+            fetch('/api/calibrate/calculate', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        finishCalibration(true);
+                    } else {
+                        alert('Erreur de calcul de la calibration: ' + data.message);
+                        finishCalibration(false);
+                    }
+                })
+                .catch(err => {
+                    alert('Erreur serveur durant le calcul de la calibration.');
+                    finishCalibration(false);
+                });
+        }
+
+        calibBtn.addEventListener('click', startCalibration);
+        cancelCalibBtn.addEventListener('click', cancelCalibration);
+
+        function displayScreenConfig(updateMainDisplay = false) {
+            const displayDiv = document.getElementById('screen-config-display');
+            const contentDiv = document.getElementById('screen-config-content');
+            const mainInfoDiv = document.getElementById('main-screen-info');
+            const svg = document.getElementById('tracker2DScene');
+
+            fetch('/api/screen_config')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        const config = data.config;
+                        const formatVec = (v) => `[${v.map(n => n.toFixed(1)).join(', ')}]`;
+                        
+                        // Update settings modal
+                        contentDiv.innerHTML = `
+                            <span class="text-slate-400">Point Bas-Gauche:</span> <span>${formatVec(config.origin)}</span>
+                            <span class="text-slate-400">Taille:</span> <span>${config.width_cm.toFixed(1)}cm x ${config.height_cm.toFixed(1)}cm</span>
+                        `;
+                        displayDiv.classList.remove('hidden');
+
+                        // Store dimensions and full geometry for UI display and calculations
+                        calibratedScreenDims = { width: config.width_cm, height: config.height_cm };
+                        screenGeometry = {
+                            origin: config.origin, // in cm
+                            vec_x: config.vec_x,   // in cm
+                            vec_y: config.vec_y    // in cm
+                        };
+                        
+                        // Dynamically set the SVG viewBox to match the calibrated screen aspect ratio
+                        svg.setAttribute('viewBox', `0 0 ${config.width_cm} ${config.height_cm}`);
+                        updateAspectRatioCorrection(); // Update correction factor now that viewbox is set
+                        drawRulersAndGrid(config.width_cm, config.height_cm);
+
+                        // Optionally, update main screen display
+                        if (updateMainDisplay) {
+                             const origin = config.origin;
+                             const vec_x = config.vec_x;
+                             const vec_y = config.vec_y;
+
+                             // Calculate corners in cm
+                            const bl = origin; // bottom-left
+                            const br = [origin[0] + vec_x[0], origin[1] + vec_x[1], origin[2] + vec_x[2]]; // bottom-right
+                            const tl = [origin[0] + vec_y[0], origin[1] + vec_y[1], origin[2] + vec_y[2]]; // top-left
+                            const tr = [tl[0] + vec_x[0], tl[1] + vec_x[1], tl[2] + vec_x[2]]; // top-right
+                            
+                            const formatCorner = (name, vec) => `
+                                <div class="flex items-center gap-1">
+                                    <span class="text-slate-500">${name}:</span>
+                                    <span class="text-xs">[${vec.map(n => Math.round(n)).join(',')}]</span>
+                                </div>
+                            `;
+
+                             mainInfoDiv.innerHTML = `
+                                <div class="flex flex-col items-start">
+                                    <span><span class="text-slate-500">Taille:</span> ${config.width_cm.toFixed(1)}cm x ${config.height_cm.toFixed(1)}cm</span>
+                                </div>
+                                <div class="grid grid-cols-2 gap-x-3 gap-y-0 text-right">
+                                    ${formatCorner("HG", tl)}
+                                    ${formatCorner("HD", tr)}
+                                    ${formatCorner("BG", bl)}
+                                    ${formatCorner("BD", br)}
+                                </div>
+                            `;
+                            mainInfoDiv.classList.remove('hidden');
+                        }
+
+                    } else {
+                        displayDiv.classList.add('hidden');
+                        mainInfoDiv.classList.add('hidden');
+                        calibratedScreenDims = { width: null, height: null };
+                        screenGeometry = { origin: null, vec_x: null, vec_y: null };
+                        // Reset to a default viewbox if no calibration exists
+                        svg.setAttribute('viewBox', `0 0 435 250`);
+                        document.getElementById('rulers-group').innerHTML = ''; // Clear rulers
+                    }
+                });
+        }
+
+        function drawRulersAndGrid(width_cm, height_cm) {
+            const rulersGroup = document.getElementById('rulers-group');
+            if (!rulersGroup || !width_cm || !height_cm) return;
+
+            rulersGroup.innerHTML = ''; // Clear old rulers
+            const svgNS = "http://www.w3.org/2000/svg";
+            const gridColor = 'rgba(51, 65, 85, 0.5)'; // slate-700 with alpha
+            const strokeColor = '#334155'; // slate-700
+            const textColor = '#64748b'; // slate-500
+            const lineThickness = (Math.min(width_cm, height_cm) / 500).toFixed(2);
+
+            // Font size relative to the display height for readability.
+            const fontSize = height_cm / 35; 
+            const tickLength = fontSize * 1.2;
+            const textOffset = fontSize * 0.4;
+
+            const formatLabel = (value_cm) => {
+                if (Math.abs(value_cm) < 0.01) return '0';
+                let meters = (value_cm / 100).toFixed(2);
+                if (meters.endsWith('.00')) return meters.slice(0, -3);
+                if (meters.endsWith('0')) return meters.slice(0, -1);
+                return meters;
+            };
+
+            // --- X-Axis Ruler (Bottom) ---
+            const xTickInterval_cm = width_cm > 150 ? 40 : 20;
+            const numTicksX = Math.floor(width_cm / xTickInterval_cm);
+            
+            for (let i = 0; i <= numTicksX; i++) {
+                const x_cm = i * xTickInterval_cm;
+                
+                const gridLineX = document.createElementNS(svgNS, 'line');
+                gridLineX.setAttribute('x1', x_cm);
+                gridLineX.setAttribute('y1', 0);
+                gridLineX.setAttribute('x2', x_cm);
+                gridLineX.setAttribute('y2', height_cm);
+                gridLineX.setAttribute('stroke', gridColor);
+                gridLineX.setAttribute('stroke-width', lineThickness);
+                rulersGroup.appendChild(gridLineX);
+
+                const tick = document.createElementNS(svgNS, 'line');
+                tick.setAttribute('x1', x_cm);
+                tick.setAttribute('y1', height_cm); 
+                tick.setAttribute('x2', x_cm);
+                tick.setAttribute('y2', height_cm - tickLength); 
+                tick.setAttribute('stroke', strokeColor);
+                tick.setAttribute('stroke-width', lineThickness);
+                rulersGroup.appendChild(tick);
+
+                const label = document.createElementNS(svgNS, 'text');
+                label.setAttribute('x', x_cm);
+                label.setAttribute('y', height_cm - tickLength - textOffset); 
+                label.setAttribute('class', 'ruler-text');
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('font-size', fontSize.toFixed(2)); 
+                label.style.fill = textColor;
+                label.textContent = formatLabel(x_cm);
+                rulersGroup.appendChild(label);
+            }
+            
+            // --- Y-Axis Ruler (Left) ---
+            const yTickInterval_cm = 10;
+            const numTicksY = Math.floor(height_cm / yTickInterval_cm);
+
+            for (let i = 0; i <= numTicksY; i++) {
+                const y_cm_from_bottom = i * yTickInterval_cm;
+                const y_svg = height_cm - y_cm_from_bottom; 
+                
+                const gridLineY = document.createElementNS(svgNS, 'line');
+                gridLineY.setAttribute('x1', 0);
+                gridLineY.setAttribute('y1', y_svg);
+                gridLineY.setAttribute('x2', width_cm);
+                gridLineY.setAttribute('y2', y_svg);
+                gridLineY.setAttribute('stroke', gridColor);
+                gridLineY.setAttribute('stroke-width', lineThickness);
+                rulersGroup.appendChild(gridLineY);
+
+                const tick = document.createElementNS(svgNS, 'line');
+                tick.setAttribute('x1', 0);
+                tick.setAttribute('y1', y_svg);
+                tick.setAttribute('x2', tickLength); 
+                tick.setAttribute('y2', y_svg);
+                tick.setAttribute('stroke', strokeColor);
+                tick.setAttribute('stroke-width', lineThickness);
+                rulersGroup.appendChild(tick);
+
+                if (i > 0) { 
+                    const label = document.createElementNS(svgNS, 'text');
+                    label.setAttribute('x', tickLength + textOffset);
+                    label.setAttribute('y', y_svg);
+                    label.setAttribute('dy', '0.35em'); // Vertically center
+                    label.setAttribute('class', 'ruler-text');
+                    label.setAttribute('font-size', fontSize.toFixed(2));
+                    label.setAttribute('text-anchor', 'start');
+                    label.style.fill = textColor;
+                    label.textContent = formatLabel(y_cm_from_bottom);
+                    rulersGroup.appendChild(label);
+                }
+            }
+        }
+
+        const openModal = () => {
+            displayScreenConfig(); // Try to show config every time modal is opened
+            fetchAnchorConfig().then(() => { // Ensure latest config is loaded before showing
+                anchorFormContainer.innerHTML = ''; // Clear previous form
+                const anchorIds = Object.keys(anchorPositions).sort();
+
+                anchorIds.forEach(id => {
+                    // anchorPositions is in meters, form needs cm. Round to avoid float issues.
+                    const pos_m = anchorPositions[id];
+                    const pos_cm = { 
+                        x: Math.round(pos_m.x * 100), 
+                        y: Math.round(pos_m.y * 100), 
+                        z: Math.round(pos_m.z * 100) 
+                    };
+
+                    const inputGroup = document.createElement('div');
+                    inputGroup.innerHTML = `
+                        <h4 class="font-bold text-sky-400 mb-2">${id}</h4>
+                        <div class="grid grid-cols-3 gap-2">
+                            <label class="block">
+                                <span class="text-xs text-slate-400">X (cm)</span>
+                                <input type="number" id="${id}_x" value="${pos_cm.x}" required class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                            </label>
+                             <label class="block">
+                                <span class="text-xs text-slate-400">Y (cm)</span>
+                                <input type="number" id="${id}_y" value="${pos_cm.y}" required class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                            </label>
+                             <label class="block">
+                                <span class="text-xs text-slate-400">Z (cm)</span>
+                                <input type="number" id="${id}_z" value="${pos_cm.z}" required class="w-full bg-slate-700 border-slate-600 rounded-md p-2 text-sm">
+                            </label>
+                        </div>
+                    `;
+                    anchorFormContainer.appendChild(inputGroup);
+                });
+    
+                settingsModal.classList.remove('hidden');
+            });
+        };
+    
+        const closeModal = () => {
+            settingsModal.classList.add('hidden');
+        };
+
+        settingsBtn.addEventListener('click', openModal);
+        closeModalBtn.addEventListener('click', closeModal);
+        cancelModalBtn.addEventListener('click', closeModal);
+
+        anchorForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const newAnchorConfig = { anchors: {} };
+            const anchorIds = Object.keys(anchorPositions).sort();
+
+            anchorIds.forEach(id => {
+                newAnchorConfig.anchors[id] = {
+                    x: parseInt(document.getElementById(`${id}_x`).value, 10),
+                    y: parseInt(document.getElementById(`${id}_y`).value, 10),
+                    z: parseInt(document.getElementById(`${id}_z`).value, 10)
+                };
+            });
+
+            fetch('/api/anchors', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newAnchorConfig)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    // Success, the backend will now use the new coords.
+                    // We need to re-fetch the config to get the calculated screen dimensions if any.
+                    // The backend recalculates screen config automatically when anchors are updated.
+                    fetchAnchorConfig().then(() => {
+                        displayScreenConfig(true); // Redraw everything with new data
+                        closeModal();
+                    });
+                } else {
+                    alert('Erreur lors de la mise à jour des ancres: ' + (data.message || 'Erreur inconnue.'));
+                }
+            })
+            .catch(err => {
+                console.error('Erreur de sauvegarde des ancres:', err);
+                alert('Erreur de communication lors de la sauvegarde des ancres.');
+            });
+        });
+
+        manualSaveBtn.addEventListener('click', () => {
+            const payload = {
+                width_cm: parseFloat(document.getElementById('manual_screen_width').value),
+                height_cm: parseFloat(document.getElementById('manual_screen_height').value),
+                origin_x: parseFloat(document.getElementById('manual_origin_x').value),
+                origin_y: parseFloat(document.getElementById('manual_origin_y').value),
+                origin_z: parseFloat(document.getElementById('manual_origin_z').value)
+            };
+
+            if (Object.values(payload).some(v => isNaN(v))) {
+                alert("Veuillez remplir tous les champs de configuration manuelle avec des nombres valides.");
+                return;
+            }
+            
+            fetch('/api/screen_config/manual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    displayScreenConfig(true);
+                    closeModal();
+                } else {
+                    alert('Erreur lors de la sauvegarde manuelle : ' + (data.message || 'Erreur inconnue'));
+                }
+            }).catch(err => {
+                console.error("Erreur de sauvegarde manuelle:", err);
+                alert("Erreur de communication lors de la sauvegarde manuelle.");
+            });
+        });
+
+        // -- Fullscreen Button Logic --
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        alert(`Erreur lors du passage en plein écran : ${err.message} (${err.name})`);
+                    });
+                } else {
+                    document.exitFullscreen();
+                }
+            });
+        }
+        
+        // Update button icon when fullscreen state changes (e.g. via Esc key)
+        document.addEventListener('fullscreenchange', () => {
+            const fullscreenIcon = fullscreenBtn.querySelector('.material-icons-outlined');
+            if (document.fullscreenElement) {
+                fullscreenIcon.textContent = 'fullscreen_exit';
+                fullscreenBtn.title = 'Quitter le Plein Écran';
+            } else {
+                fullscreenIcon.textContent = 'fullscreen';
+                fullscreenBtn.title = 'Plein Écran';
+            }
+            });
+    });
+    </script>
+</body>
+</html>
